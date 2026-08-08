@@ -42,10 +42,12 @@ flowchart LR
 | Layer | What lives here | Form |
 |-------|-----------------|------|
 | **Bronze** | Raw generated data, landed exactly as produced — messy dates, dupes, dirty names | CSV in Lakehouse `Files/` |
-| **Silver** | Parsed, deduplicated, type-enforced, entity-resolved | Managed Delta tables |
-| **Gold** | Dimensional star schema optimized for analytics and reporting | Managed Delta tables |
-| **ML** | Cost-overrun regression, safety-incident classification, tracked with MLflow | Fabric notebooks |
+| **Silver** | Parsed, deduplicated, type-enforced, entity-resolved; lineage-stamped (`batch_id`, `ingested_at`, `data_split`) | Managed Delta tables |
+| **Gold** | Dimensional star schema (dimensions + facts, deterministic surrogate keys) plus a model-ready training table | Managed Delta tables |
+| **ML** | Cost-overrun regression, tracked and registered with MLflow | Fabric notebook |
 | **Reporting** | KPIs and model output over a Direct Lake semantic model | Power BI report |
+
+An **incremental ingest** path adds new batches to silver on demand — self-detecting the next batch number from the Lakehouse, stamping each batch as held-out `test` data, and appending idempotently (create-or-append with a key-based dedup safety net).
 
 ---
 
@@ -81,21 +83,47 @@ The silver notebook is where this gets resolved — date parsing, deduplication,
 
 ---
 
+## Engineered signal (modeling on synthetic data, honestly)
+
+Random synthetic data has no real relationships for a model to learn, so the generator deliberately encodes **documented causal relationships** into project outcomes. This makes the ML meaningful: the model can be validated by confirming it recovers the relationships that were built in.
+
+The engineered ground truth:
+
+- **Cost overrun** rises with change-order volume, Design-Bid-Build delivery (least owner control), complex project types (data center, mission-critical, healthcare), and MEP-heavy CSI divisions (HVAC, electrical, plumbing); it falls with better subcontractor ratings.
+- **Schedule delay** rises with winter starts, project complexity, and Design-Bid-Build delivery.
+- **Safety incidents** rise with overtime intensity and project size; severity skews toward certain trades (ironworkers, operators).
+
+All relationships are parameterized and applied with bounded noise, so the signal is learnable but not trivially perfect. The trained model recovers them: **delivery method and change-order ratio rank as the top features**, and mean overrun by delivery method reproduces the engineered ordering (Design-Bid-Build highest → IPD lowest). This "recover the known signal" approach is how the modeling methodology is validated despite the data being synthetic.
+
+---
+
+## Data engineering notes
+
+A few deliberate design choices worth calling out:
+
+- **Deterministic surrogate keys.** Gold dimensions use `row_number()` over an ordered window (materialized before joins), *not* `monotonically_increasing_id()` — the latter can be recomputed by Spark and silently corrupt fact-to-dimension joins.
+- **Referential integrity is validated, not enforced.** A Lakehouse doesn't enforce foreign keys, so gold includes an explicit orphan-check step confirming every fact row resolves to its dimensions. Relationships are then declared in the Power BI semantic model.
+- **Provenance-based train/test split.** Lineage columns (`batch_id`, `data_split`) let the model train on the original load and evaluate on later-ingested batches — a held-out set defined by *when data arrived*, closer to real deployment than a random shuffle.
+- **Idempotent incremental loads.** The incremental notebook is safe to re-run: create-or-append plus key-based dedup means a repeated batch can't create duplicates.
+
+---
+
 ## Repository structure
 
 ```
 fabric-construction-analytics/
 ├── README.md
-├── requirements.txt                    # local dev dependencies (not used by Fabric)
+├── requirements.txt                       # local dev dependencies (not used by Fabric)
 ├── data_generation/
-│   └── generate_construction_data.py   # parameterized synthetic generator
+│   └── generate_construction_data.py      # parameterized generator, with engineered signal
 ├── notebooks/
-│   ├── 01_bronze_ingest.py             # generate + land raw CSVs
-│   ├── 02_silver_cleanup.py            # clean, dedupe, conform → Delta
-│   ├── 03_gold_star_schema.py          # dimensional model
-│   └── 04_ml_cost_overrun.py           # MLflow-tracked model training
+│   ├── 01_bronze_ingest.ipynb             # generate + land raw messy CSVs (bronze)
+│   ├── 02_silver_cleanup.ipynb            # clean, dedupe, entity-resolve, lineage-stamp → Delta
+│   ├── 03_incremental_ingest.ipynb        # add new batches to silver (self-detecting, idempotent)
+│   ├── 04_gold_star_schema.ipynb          # dimensions + facts + RI check + ML training table
+│   └── 05_cost_overrun_model.ipynb        # MLflow-tracked, registered regression model
 ├── docs/
-│   └── architecture.md                 # detailed design notes
+│   └── architecture.md                    # detailed design notes
 └── .gitignore
 ```
 
@@ -103,13 +131,20 @@ fabric-construction-analytics/
 
 ## Machine learning
 
-| Model | Type | Target | Features |
-|-------|------|--------|----------|
-| Cost overrun | Regression | actual ÷ budget by division | project type, region, delivery method, division, change orders |
-| Project delay | Classification | on-time vs delayed | planned duration, task slippage, project attributes |
-| Safety risk | Classification | incident likelihood / severity | trade mix, labor hours, project type, region |
+The built and validated model is **cost-overrun regression**, predicting `overrun_ratio` (actual ÷ budget) at the cost-line-item grain:
 
-Training runs in Fabric notebooks with **MLflow** experiment tracking (native to Fabric) — parameters, metrics, and artifacts logged per run, with the best model registered for scoring.
+| Aspect | Detail |
+|--------|--------|
+| Model | Gradient-boosted regression (scikit-learn) |
+| Target | `overrun_ratio` = actual ÷ budget |
+| Features | project type, delivery method, region, CSI division, division group, change-order ratio, winter-start flag |
+| Evaluation | held-out test set (provenance-based when an incremental batch exists, else random 75/25) |
+| Result | **R² ≈ 0.60** on held-out data; top features are delivery method and change-order ratio — recovering the engineered signal |
+| Tracking | MLflow run logs params, metrics, and the model; registered as `construction_cost_overrun` |
+
+Training runs in a Fabric notebook with **MLflow** experiment tracking (native to Fabric) — parameters, metrics, and artifacts logged per run, with the model registered for scoring.
+
+**Future scope** (the data supports these; models not yet built): a **project-delay classifier** (on-time vs delayed, using the engineered winter-start / complexity / delivery signal) and a **safety-risk model** (incident likelihood by project, using overtime and project attributes). The safety data is thin at the current scale, so that model is noted as a methodology demonstration rather than a production classifier.
 
 ---
 
@@ -128,6 +163,10 @@ python data_generation/generate_construction_data.py --projects 120 --seed 42 --
 ```
 
 Adjust `--projects` to scale volume and `--seed` for a fresh variant of the mess.
+
+### Running the pipeline in Fabric
+
+Notebooks run in order: `01` (bronze) → `02` (silver) → `04` (gold) → `05` (model). `03` (incremental) is run on demand to add a test batch, after which `04` and `05` are re-run to refresh gold and retrain. Each layer is a batch step — new data reaches gold only when gold is re-run. In production this would be orchestrated with a **Fabric Data Pipeline** (scheduled, or triggered when new files land in bronze) rather than run by hand.
 
 ### Inside Fabric
 
