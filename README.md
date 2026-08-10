@@ -2,7 +2,7 @@
 
 An end-to-end analytics and machine-learning project built on **Microsoft Fabric**, using a synthetic dataset modeled on a large national commercial construction company (**Meridian Construction Group**, fictional). Deliberately messy, multi-table source data flows through a medallion (bronze → silver → gold) architecture into a calibrated over-cost risk classifier, surfaced in a three-page Power BI report over a Direct Lake semantic model.
 
-📊 **[View the full dashboard (PDF)](docs/dashboard.pdf)**
+📊 **[View the full dashboard (PDF)](docs/Meridian Portfolio.pdf)**
 
 > **Note on the data:** every record is synthetic, generated programmatically with intentional data-quality issues and documented, engineered relationships. No real company data is used. "Meridian Construction Group" is invented for demonstration. Dollar magnitudes are illustrative; the *relationships* between variables are what's engineered and modeled.
 
