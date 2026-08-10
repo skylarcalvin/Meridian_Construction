@@ -1,29 +1,32 @@
 # Fabric Construction Analytics
 
-An end-to-end analytics and machine-learning solution built on **Microsoft Fabric**, using a synthetic dataset modeled on a large national commercial construction company (**Meridian Construction Group**, a fictional firm). The project takes deliberately messy, multi-table source data from raw landing through a medallion (bronze → silver → gold) architecture and into trained ML models, surfaced in a Power BI report over a Direct Lake semantic model.
+An end-to-end analytics and machine-learning project built on **Microsoft Fabric**, using a synthetic dataset modeled on a large national commercial construction company (**Meridian Construction Group**, fictional). Deliberately messy, multi-table source data flows through a medallion (bronze → silver → gold) architecture into a calibrated over-cost risk classifier, surfaced in a three-page Power BI report over a Direct Lake semantic model.
 
-> **Note on the data:** every record here is synthetic, generated programmatically with intentional data-quality issues. No real company data is used. "Meridian Construction Group" is invented for demonstration purposes.
+📊 **[View the full dashboard (PDF)](docs/dashboard.pdf)**
+
+> **Note on the data:** every record is synthetic, generated programmatically with intentional data-quality issues and documented, engineered relationships. No real company data is used. "Meridian Construction Group" is invented for demonstration. Dollar magnitudes are illustrative; the *relationships* between variables are what's engineered and modeled.
 
 ---
 
 ## About Meridian Construction Group (fictional)
 
-**Meridian Construction Group** is a fictional large national commercial builder created to give this project a realistic operational context. It is not a real company, and any resemblance to an actual firm is coincidental. The profile below simply defines the "shape" of the business so the synthetic data and the analytics built on it hang together.
+Meridian is a fictional national general contractor / construction manager, created to give the project realistic operational context. Modeled profile:
 
-Meridian is modeled as a **general contractor / construction manager** operating across the United States, delivering large commercial and institutional projects. Its profile:
+- **Delivery models:** CM at Risk, Design-Build, Design-Bid-Build, IPD, CM Agency
+- **Verticals:** healthcare, commercial, higher education, K-12, government/civic, aviation, data centers, mission-critical, industrial, sports & entertainment
+- **Geographic footprint:** offices across Kansas City, Denver, Dallas, Houston, Atlanta, Phoenix, Portland, Nashville, Minneapolis, Omaha, Austin, Charlotte
+- **Operations captured:** project portfolios, cost tracking by CSI MasterFormat division, subcontractor prequalification and bidding, field labor/timesheets, jobsite safety
 
-- **Delivery models:** primarily CM at Risk and Design-Build, with some Design-Bid-Build, IPD, and CM Agency work — the mix a modern national builder actually runs.
-- **Verticals:** healthcare, commercial, higher education, K-12, government/civic, aviation, data centers, mission-critical, industrial, and sports & entertainment facilities.
-- **Geographic footprint:** regional offices across metros including Kansas City, Denver, Dallas, Houston, Atlanta, Phoenix, Portland, Nashville, Minneapolis, Omaha, Austin, and Charlotte.
-- **Operations captured in the data:** project portfolios with budgets and schedules, cost tracking by CSI MasterFormat division, subcontractor prequalification and bidding, field labor and timesheets, and jobsite safety reporting.
-
-This profile is what the generator encodes: every project, cost line, bid, timesheet, and safety incident in the dataset is a plausible artifact of a company that looks like Meridian. The point is not the fiction itself but that it produces **domain-realistic, messy, interrelated data** — the kind a real construction company's systems generate — so the medallion pipeline and ML models have something genuine to work on.
+The generator encodes this profile so the pipeline and model work on domain-realistic, messy, interrelated data.
 
 ---
 
-## Why this project
+## What this project demonstrates
 
-Construction analytics is a domain where the data is genuinely messy — inconsistent cost coding, schedule slippage, duplicate vendor records, sparse safety logs — and where the business questions (Will this project run over budget? Which jobs are slipping? Where is safety risk concentrated?) map cleanly onto ML. This repo demonstrates the full lifecycle on Fabric: ingestion, medallion transformation, dimensional modeling, experiment-tracked ML, and reporting.
+- A full **medallion pipeline** on Fabric: ingestion, cleaning, dimensional modeling, incremental loads
+- **Data-quality engineering**: multi-format date parsing, deduplication, vendor entity-resolution, range validation
+- **ML with discipline**: leakage-safe feature engineering, a multi-model bake-off with cross-validation, calibrated probabilities, MLflow tracking and model registry, frozen-model scoring of unseen data
+- **A decision-support dashboard**: historical portfolio, current status, and a model-driven risk view over Direct Lake
 
 ---
 
@@ -31,80 +34,131 @@ Construction analytics is a domain where the data is genuinely messy — inconsi
 
 ```mermaid
 flowchart LR
-    A[Synthetic Data Generator<br/>Python + Faker] --> B[Bronze<br/>Raw CSVs in Lakehouse Files]
-    B --> C[Silver<br/>Cleaned & conformed<br/>Delta tables]
-    C --> D[Gold<br/>Star schema<br/>facts + dimensions]
-    D --> E[ML Notebooks<br/>MLflow tracking]
-    D --> F[Power BI<br/>Direct Lake semantic model]
-    E --> F
+    A[Synthetic Generator<br/>Python + Faker<br/>engineered signal] --> B[Bronze<br/>raw messy CSVs<br/>Lakehouse Files]
+    B --> C[Silver<br/>cleaned + conformed<br/>lineage-stamped Delta]
+    C --> D[Gold<br/>star schema<br/>+ ML feature tables]
+    D --> E[Classifier<br/>5-model bake-off<br/>MLflow registry]
+    E --> F[Scoring<br/>frozen model<br/>project_risk_scores]
+    D --> G[Power BI<br/>Direct Lake<br/>3-page report]
+    F --> G
+    C -.incremental batches.-> C
 ```
 
-| Layer | What lives here | Form |
-|-------|-----------------|------|
-| **Bronze** | Raw generated data, landed exactly as produced — messy dates, dupes, dirty names | CSV in Lakehouse `Files/` |
-| **Silver** | Parsed, deduplicated, type-enforced, entity-resolved; lineage-stamped (`batch_id`, `ingested_at`, `data_split`) | Managed Delta tables |
-| **Gold** | Dimensional star schema (dimensions + facts, deterministic surrogate keys) plus a model-ready training table | Managed Delta tables |
-| **ML** | Cost-overrun regression, tracked and registered with MLflow | Fabric notebook |
-| **Reporting** | KPIs and model output over a Direct Lake semantic model | Power BI report |
+| Layer | Contents | Form |
+|-------|----------|------|
+| **Bronze** | Raw generated data, landed as-is — messy dates, dupes, dirty vendor names | CSV in Lakehouse `Files/` |
+| **Silver** | Parsed, deduplicated, entity-resolved, type-enforced; lineage columns (`batch_id`, `ingested_at`, `data_split`) | Managed Delta |
+| **Gold** | Star schema (dimensions + facts, deterministic surrogate keys) + model-ready feature tables | Managed Delta |
+| **ML** | Over-cost risk classifier, cross-validated bake-off, registered model | Fabric notebook + MLflow |
+| **Scoring** | Frozen-model inference → `project_risk_scores` (probabilities + risk bands) | Managed Delta |
+| **Reporting** | 3-page dashboard over a Direct Lake semantic model | Power BI |
 
-An **incremental ingest** path adds new batches to silver on demand — self-detecting the next batch number from the Lakehouse, stamping each batch as held-out `test` data, and appending idempotently (create-or-append with a key-based dedup safety net).
-
----
-
-## Data model
-
-Seven interrelated source tables represent a construction company's operational footprint:
-
-| Table | Grain | Notable fields | Feeds |
-|-------|-------|----------------|-------|
-| `projects` | one row per project | type, region, delivery method, contract value, planned vs actual dates | delay analysis |
-| `cost_line_items` | project × CSI division | budget vs actual, change orders | **cost-overrun model** |
-| `schedule_tasks` | project × task | planned vs actual duration, predecessors | **delay model** |
-| `labor_timesheets` | crew-day | trade, regular/OT hours, rate | labor cost rollups |
-| `subcontractors` | one row per sub | trade focus, rating, prequalification | vendor analysis |
-| `sub_bids` | project × division × bidder | bid amount, awarded flag | bid competitiveness |
-| `safety_incidents` | one row per incident | type, severity, root cause, lost days | **safety classifier** |
-
-Cost is coded by **CSI MasterFormat division** (03 Concrete, 23 HVAC, 26 Electrical, …), the standard language of construction estimating.
+📄 For the design rationale behind each layer — surrogate keys, leakage discipline, model selection, and the bugs caught along the way — see **[docs/architecture.md](docs/architecture.md)**.
 
 ---
 
-## The mess (and why it's intentional)
+## Pipeline notebooks
 
-Bronze data faithfully preserves the kind of problems real source systems produce, so the silver layer has something real to solve:
+Run in order: `01 → 02 → 04 → 05 → 06 → 07`. `03` (incremental) runs on demand to add a batch, after which `04 → 05 → 07` refresh.
 
-- **Inconsistent date formats** across every date column (`2024-06-19`, `08-Aug-2025`, `06/19/24`), plus a few impossible dates
-- **Missing values** scattered through nullable fields
-- **Duplicate records** — both exact-duplicate project rows and vendors entered under variant spellings (`Sawyer Group LLC` / `SAWYER GROUP L.L.C.` / `  sawyer group llc `)
+| Notebook | Role |
+|----------|------|
+| `01_bronze_ingest` | Generate signal-bearing messy data, land raw CSVs (bronze) |
+| `02_silver_cleanup` | Clean, dedupe, entity-resolve, lineage-stamp → Delta |
+| `03_incremental_ingest` | Add a new batch to silver — self-detects next batch number, idempotent append |
+| `04_gold_star_schema` | Dimensions + facts + referential-integrity check + `ml_cost_training` |
+| `05_gold_project_classification` | Project-grain, leakage-safe feature table with binary over-cost label |
+| `06_overrun_classifier` | 5-model bake-off (LR, NB, RF, GBM, SVM), cross-validated, MLflow, register winner |
+| `07_score_projects` | Load registered model, score projects (no retraining) → `project_risk_scores` |
+
+---
+
+## The data model
+
+Seven source tables represent the operational footprint: `projects`, `cost_line_items` (by CSI division), `schedule_tasks`, `labor_timesheets`, `subcontractors`, `sub_bids`, `safety_incidents`. Cost is coded by **CSI MasterFormat division** (03 Concrete, 23 HVAC, 26 Electrical, …).
+
+Gold reshapes these into a **star schema**: `dim_project`, `dim_date`, `dim_vendor`, `dim_division`, and fact tables `fact_cost`, `fact_labor`, `fact_safety`, `fact_schedule`.
+
+---
+
+## The mess (intentional)
+
+Bronze preserves the problems real source systems produce, so silver has real work to do:
+
+- **Inconsistent date formats** across every date column, plus injected impossible dates (year 1, year 2099)
+- **Missing values** through nullable fields
+- **Duplicate records** — exact-duplicate project rows and vendors under variant spellings (`Sawyer Group LLC` / `SAWYER GROUP L.L.C.` / `  sawyer group llc `)
 - **Negative and zero costs**, contract-value outliers
-- **Inconsistent categoricals** (`Y` / `Yes` / `TRUE` for the same boolean)
+- **Inconsistent categoricals** (`Y` / `Yes` / `TRUE`)
 
-The silver notebook is where this gets resolved — date parsing, deduplication, fuzzy vendor entity-resolution, type enforcement, and range validation.
+Silver resolves these: multi-format date parsing with range-bounding (implausible dates → null), deduplication, fuzzy vendor entity-resolution via a normalized match key, boolean normalization, and type enforcement.
 
 ---
 
 ## Engineered signal (modeling on synthetic data, honestly)
 
-Random synthetic data has no real relationships for a model to learn, so the generator deliberately encodes **documented causal relationships** into project outcomes. This makes the ML meaningful: the model can be validated by confirming it recovers the relationships that were built in.
+Random synthetic data has no relationships to learn, so the generator encodes **documented causal relationships**, and the model is validated by confirming it recovers them:
 
-The engineered ground truth:
+- **Cost overrun** rises with change-order volume, Design-Bid-Build delivery, complex project types (data center, mission-critical, healthcare), and MEP-heavy CSI divisions; falls with better subcontractor ratings.
+- **Schedule delay** rises with winter starts, complexity, and Design-Bid-Build.
+- **Safety incidents** rise with overtime intensity and project size.
 
-- **Cost overrun** rises with change-order volume, Design-Bid-Build delivery (least owner control), complex project types (data center, mission-critical, healthcare), and MEP-heavy CSI divisions (HVAC, electrical, plumbing); it falls with better subcontractor ratings.
-- **Schedule delay** rises with winter starts, project complexity, and Design-Bid-Build delivery.
-- **Safety incidents** rise with overtime intensity and project size; severity skews toward certain trades (ironworkers, operators).
+The model recovers these: mean overrun by delivery method reproduces the engineered ordering (Design-Bid-Build highest → IPD lowest), and it's the top feature. This "recover the known signal" approach validates the methodology despite the data being synthetic.
 
-All relationships are parameterized and applied with bounded noise, so the signal is learnable but not trivially perfect. The trained model recovers them: **delivery method and change-order ratio rank as the top features**, and mean overrun by delivery method reproduces the engineered ordering (Design-Bid-Build highest → IPD lowest). This "recover the known signal" approach is how the modeling methodology is validated despite the data being synthetic.
+---
+
+## Machine learning: over-cost risk classification
+
+**Problem framing.** Rather than predict *how much* a project will overrun (false precision on synthetic data), the model predicts the **probability a project overruns** at kickoff — a binary classifier producing a calibrated risk score, which is what a decision-support tool actually needs.
+
+**Target.** `is_overrun` = project-level `actual ÷ budget > 1.18`. The threshold sits near the project-grain median, so "over-cost" means "worse than a typical project" and the class balance is natural — no resampling, which keeps predicted probabilities calibrated.
+
+**Leakage discipline.** Features use only what's known at project **start**: project type, delivery method, region, contract value, square footage, planned duration, winter-start flag, MEP budget share. No actuals, no realized durations — nothing that only exists once the project runs.
+
+**Bake-off.** Five classifiers compared under one preprocessing pipeline with 5-fold stratified cross-validation: logistic regression, Naive Bayes, random forest, gradient boosting, SVM. They performed comparably (CV-AUC ≈ 0.82–0.86). **Logistic regression was selected** — its CV edge was within one standard deviation of the nominal winner, but it had the best held-out AUC, the best calibration (lowest Brier), and interpretable odds ratios. For a risk score a PM must trust, interpretability + calibration outweigh a noise-level accuracy difference.
+
+**Interpretability.** Odds ratios recover the engineered drivers — e.g. CM Agency and Design-Bid-Build carry several times the odds of over-cost versus IPD; Mission Critical elevated. Numbers you can explain to a project manager.
+
+**Validation on unseen data.** Lineage columns enable a **provenance-based split**: the model trains on the original load and is evaluated on later-ingested batches (genuinely unseen projects), not a random shuffle. Training and scoring are separate notebooks — scoring loads the *registered, frozen* model rather than retraining — so new batches are a true holdout and probabilities stay comparable across batches.
+
+**Calibration (the payoff).** Risk bands map cleanly to actual outcomes:
+
+| Risk band | Actual overrun rate |
+|-----------|---------------------|
+| Low | ~14% |
+| Medium | ~53% |
+| High | ~89% |
+
+When the model says "High risk," ~89% of those projects actually overran — a trustworthy, actionable score.
+
+---
+
+## Dashboard (Power BI, Direct Lake)
+
+Three pages over the gold semantic model — see **[docs/dashboard.pdf](docs/dashboard.pdf)**:
+
+1. **Historical Portfolio** — KPIs, overrun by project type and delivery method (the engineered signal, visible), regional breakdown, project detail.
+2. **Current Project Status** — active-project budget burn, schedule progress, operational view.
+3. **Over-Cost Risk Analysis** — risk-band distribution, the calibration chart (actual overrun rate climbing with risk band), predicted-vs-actual scatter, and a flagged high-risk project list. A `status` slicer switches between validating on completed projects and assessing risk on active ones.
 
 ---
 
 ## Data engineering notes
 
-A few deliberate design choices worth calling out:
+- **Deterministic surrogate keys.** Gold dimensions use `row_number()` over an ordered window (materialized before joins), not `monotonically_increasing_id()` — the latter can be recomputed by Spark and silently corrupt fact-to-dimension joins.
+- **Referential integrity validated, not enforced.** A Lakehouse doesn't enforce foreign keys, so gold includes an explicit orphan-check; relationships are then declared in the semantic model.
+- **Idempotent incremental loads.** The incremental notebook is safe to re-run — create-or-append plus key-based dedup.
+- **Provenance-based evaluation.** Train/test membership is stamped at ingest (`data_split`) and durable across rebuilds, keyed to immutable `batch_id`.
 
-- **Deterministic surrogate keys.** Gold dimensions use `row_number()` over an ordered window (materialized before joins), *not* `monotonically_increasing_id()` — the latter can be recomputed by Spark and silently corrupt fact-to-dimension joins.
-- **Referential integrity is validated, not enforced.** A Lakehouse doesn't enforce foreign keys, so gold includes an explicit orphan-check step confirming every fact row resolves to its dimensions. Relationships are then declared in the Power BI semantic model.
-- **Provenance-based train/test split.** Lineage columns (`batch_id`, `data_split`) let the model train on the original load and evaluate on later-ingested batches — a held-out set defined by *when data arrived*, closer to real deployment than a random shuffle.
-- **Idempotent incremental loads.** The incremental notebook is safe to re-run: create-or-append plus key-based dedup means a repeated batch can't create duplicates.
+---
+
+## Reproducing this
+
+The whole pipeline runs inside Fabric — data generation lives in `01_bronze_ingest`, so there's no separate generation step. Attach a Lakehouse and run the notebooks in order (`01 → 02 → 04 → 05 → 06 → 07`; `03` on demand to add a batch).
+
+Fabric's Spark runtime already includes pandas, numpy, scikit-learn, and MLflow, so the only extra dependency is Faker, which the bronze notebook installs in-session with `%pip install faker`.
+
+Each medallion layer is a batch step — new data reaches gold only when gold is re-run; in production this would be orchestrated with a **Fabric Data Pipeline** (scheduled or triggered on new bronze files).
 
 ---
 
@@ -113,70 +167,21 @@ A few deliberate design choices worth calling out:
 ```
 fabric-construction-analytics/
 ├── README.md
-├── requirements.txt                       # local dev dependencies (not used by Fabric)
-├── data_generation/
-│   └── generate_construction_data.py      # parameterized generator, with engineered signal
 ├── notebooks/
-│   ├── 01_bronze_ingest.ipynb             # generate + land raw messy CSVs (bronze)
-│   ├── 02_silver_cleanup.ipynb            # clean, dedupe, entity-resolve, lineage-stamp → Delta
-│   ├── 03_incremental_ingest.ipynb        # add new batches to silver (self-detecting, idempotent)
-│   ├── 04_gold_star_schema.ipynb          # dimensions + facts + RI check + ML training table
-│   └── 05_cost_overrun_model.ipynb        # MLflow-tracked, registered regression model
+│   ├── 01_bronze_ingest.ipynb
+│   ├── 02_silver_cleanup.ipynb
+│   ├── 03_incremental_ingest.ipynb
+│   ├── 04_gold_star_schema.ipynb
+│   ├── 05_gold_project_classification.ipynb
+│   ├── 06_overrun_classifier.ipynb
+│   └── 07_score_projects.ipynb
+├── powerbi/
+│   └── construction_analytics.pbix
 ├── docs/
-│   └── architecture.md                    # detailed design notes
+│   ├── dashboard.pdf
+│   └── architecture.md
 └── .gitignore
 ```
-
----
-
-## Machine learning
-
-The built and validated model is **cost-overrun regression**, predicting `overrun_ratio` (actual ÷ budget) at the cost-line-item grain:
-
-| Aspect | Detail |
-|--------|--------|
-| Model | Gradient-boosted regression (scikit-learn) |
-| Target | `overrun_ratio` = actual ÷ budget |
-| Features | project type, delivery method, region, CSI division, division group, change-order ratio, winter-start flag |
-| Evaluation | held-out test set (provenance-based when an incremental batch exists, else random 75/25) |
-| Result | **R² ≈ 0.60** on held-out data; top features are delivery method and change-order ratio — recovering the engineered signal |
-| Tracking | MLflow run logs params, metrics, and the model; registered as `construction_cost_overrun` |
-
-Training runs in a Fabric notebook with **MLflow** experiment tracking (native to Fabric) — parameters, metrics, and artifacts logged per run, with the model registered for scoring.
-
-**Future scope** (the data supports these; models not yet built): a **project-delay classifier** (on-time vs delayed, using the engineered winter-start / complexity / delivery signal) and a **safety-risk model** (incident likelihood by project, using overtime and project attributes). The safety data is thin at the current scale, so that model is noted as a methodology demonstration rather than a production classifier.
-
----
-
-## Reproducing this
-
-### Local (outside Fabric)
-
-The dataset is fully reproducible — no data files need to be committed. Use a virtual environment:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-
-python data_generation/generate_construction_data.py --projects 120 --seed 42 --outdir ./construction_raw
-```
-
-Adjust `--projects` to scale volume and `--seed` for a fresh variant of the mess.
-
-### Running the pipeline in Fabric
-
-Notebooks run in order: `01` (bronze) → `02` (silver) → `04` (gold) → `05` (model). `03` (incremental) is run on demand to add a test batch, after which `04` and `05` are re-run to refresh gold and retrain. Each layer is a batch step — new data reaches gold only when gold is re-run. In production this would be orchestrated with a **Fabric Data Pipeline** (scheduled, or triggered when new files land in bronze) rather than run by hand.
-
-### Inside Fabric
-
-Fabric's Spark runtime already includes pandas, numpy, and scikit-learn, so `requirements.txt` is **not** consumed there. The only extra package the generator needs is Faker, which the bronze notebook installs in-session with `%pip install faker` (or you can attach a workspace **Environment** with Faker added). Point the generator's output at the Lakehouse to land data directly:
-
-```python
-OUTDIR = "/lakehouse/default/Files/bronze/construction_raw"
-```
-
-> `requirements.txt` in this repo is for **local development and reproducibility**, not for Fabric dependency management — Fabric handles its own runtime packages.
 
 ---
 
@@ -186,4 +191,3 @@ OUTDIR = "/lakehouse/default/Files/bronze/construction_raw"
 - **MLflow** — experiment tracking and model registry (native in Fabric)
 - **Power BI** — Direct Lake semantic model and report
 - **Python** — PySpark, pandas, scikit-learn, Faker
-- **Git** — Fabric ↔ GitHub native integration for workspace ALM
